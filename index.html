@@ -2,401 +2,597 @@
 <html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=0">
-    <title>Serverless Asset Manager</title>
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/element-plus/dist/index.css" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>加密资产管家 (Serverless)</title>
+    
+    <!-- 核心依赖 CDN -->
+    <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+    <script src="https://unpkg.com/element-plus/dist/index.full.js"></script>
+    <script src="https://unpkg.com/@element-plus/icons-vue"></script>
+    <script src="https://unpkg.com/axios/dist/axios.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/crypto-js/4.1.1/crypto-js.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/echarts/5.4.3/echarts.min.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+
+    <!-- 样式库 -->
+    <link rel="stylesheet" href="https://unpkg.com/element-plus/dist/index.css" />
+
     <style>
-        body { margin: 0; padding: 0; font-family: 'Helvetica Neue', Helvetica, 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', Arial, sans-serif; background: #f5f7fa; }
-        .app-container { max-width: 1200px; margin: 0 auto; padding: 20px; }
-        .card-header { display: flex; justify-content: space-between; align-items: center; }
-        .stat-card { margin-bottom: 20px; }
-        .chart-box { height: 400px; margin-top: 20px; background: #fff; padding: 15px; border-radius: 4px; border: 1px solid #e4e7ed; }
-        .mobile-fab { position: fixed; bottom: 30px; right: 30px; z-index: 1000; }
-        /* Mobile Optimization */
+        body { font-family: 'Helvetica Neue', Helvetica, 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', '微软雅黑', Arial, sans-serif; background-color: #f3f4f6; }
+        .chart-container { width: 100%; height: 350px; }
+        .el-card { border-radius: 12px; margin-bottom: 20px; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1); }
+        /* 移动端优化 */
         @media (max-width: 768px) {
-            .app-container { padding: 10px; }
+            .mobile-padding { padding: 10px; }
             .el-dialog { width: 90% !important; }
-            .chart-box { height: 300px; }
         }
-        [v-cloak] { display: none; }
     </style>
 </head>
 <body>
-    <div id="app" v-cloak>
-        <el-dialog v-model="showAuth" title="GitHub 身份验证" :close-on-click-modal="false" :show-close="false" width="400px">
-            <el-form label-position="top">
-                <el-form-item label="Repository Owner">
-                    <el-input v-model="auth.owner" placeholder="e.g., P1nk64"></el-input>
-                </el-form-item>
-                <el-form-item label="Repository Name">
-                    <el-input v-model="auth.repo" placeholder="e.g., my-finance-repo"></el-input>
-                </el-form-item>
-                <el-form-item label="Personal Access Token (PAT)">
-                    <el-input v-model="auth.token" type="password" placeholder="ghp_... (用于加密和读写)" show-password></el-input>
-                    <div style="font-size: 12px; color: #909399; margin-top: 5px;">Token 将直接作为 AES 密钥，不仅用于 API 鉴权。</div>
-                </el-form-item>
-            </el-form>
-            <template #footer>
-                <el-button type="primary" @click="initData" :loading="loading" style="width: 100%">解锁并加载数据</el-button>
-            </template>
-        </el-dialog>
+    <div id="app" class="min-h-screen">
+        
+        <!-- 登录层 (未授权时显示) -->
+        <div v-if="!authorized" class="flex items-center justify-center min-h-screen bg-gray-900 px-4">
+            <el-card class="w-full max-w-md text-center py-8">
+                <h2 class="text-2xl font-bold mb-6 text-gray-700">安全资产访问</h2>
+                <el-input v-model="inputToken" type="password" placeholder="请输入 GitHub Personal Access Token (PAT)" show-password class="mb-4"></el-input>
+                
+                <div class="text-left text-xs text-gray-500 mb-4">
+                    <p>配置: {{ repoOwner }}/{{ repoName }}</p>
+                    <p>文件: {{ dataPath }}</p>
+                </div>
 
-        <div v-if="!showAuth" class="app-container">
-            <el-row :gutter="20" style="margin-bottom: 20px; display: flex; align-items: center;">
-                <el-col :span="12">
-                    <h2>Asset Manager <el-tag size="small" type="success">Encrypted</el-tag></h2>
-                </el-col>
-                <el-col :span="12" style="text-align: right;">
-                     <el-button v-if="isDesktop" :type="view === 'dashboard' ? 'primary' : ''" @click="view = 'dashboard'">看板</el-button>
-                     <el-button v-if="isDesktop" :type="view === 'admin' ? 'primary' : ''" @click="view = 'admin'">管理</el-button>
-                     <el-button type="danger" circle icon="Lock" @click="logout" title="锁定"></el-button>
-                </el-col>
-            </el-row>
+                <el-button type="primary" class="w-full" :loading="loading" @click="handleLogin" size="large">
+                    <el-icon class="mr-2"><Key /></el-icon> 解密并进入
+                </el-button>
+                <p class="mt-4 text-xs text-gray-400">密钥仅用于本地 AES 解密，不会发送至除 GitHub API 外的任何服务器。</p>
+            </el-card>
+        </div>
 
-            <div v-if="view === 'dashboard'">
-                <el-row :gutter="20">
-                    <el-col :xs="24" :sm="8">
-                        <el-card class="stat-card" shadow="hover">
-                            <template #header><div class="card-header"><span>总资产 (CNY)</span></div></template>
-                            <div style="font-size: 24px; font-weight: bold; color: #409EFF">¥ {{ formatMoney(metrics.totalAssets) }}</div>
-                            <div style="font-size: 12px; color: #909399; margin-top: 5px;">USD/CNY: {{ appData.settings.usd_cny_rate }}</div>
-                        </el-card>
-                    </el-col>
-                    <el-col :xs="24" :sm="8">
-                        <el-card class="stat-card" shadow="hover">
-                            <template #header><div class="card-header"><span>预估收益 (利息)</span></div></template>
-                            <div style="font-size: 24px; font-weight: bold; color: #67C23A">+ ¥ {{ formatMoney(metrics.totalInterest) }}</div>
-                        </el-card>
-                    </el-col>
-                </el-row>
+        <!-- 主应用界面 (授权后显示) -->
+        <div v-else class="pb-20">
+            <!-- 顶部导航 -->
+            <el-menu mode="horizontal" :ellipsis="false" class="px-4 flex items-center justify-between sticky top-0 z-50 shadow-sm">
+                <div class="font-bold text-xl text-blue-600 flex items-center">
+                    <el-icon class="mr-2"><Wallet /></el-icon> 资产管家
+                </div>
+                <div class="flex gap-2">
+                    <el-button :type="currentView === 'dashboard' ? 'primary' : ''" link @click="currentView = 'dashboard'">看板</el-button>
+                    <el-button :type="currentView === 'admin' ? 'primary' : ''" link @click="currentView = 'admin'">管理</el-button>
+                    <el-button type="danger" link @click="logout"><el-icon><Switch-Button /></el-icon></el-button>
+                </div>
+            </el-menu>
 
-                <el-row :gutter="20">
-                    <el-col :xs="24" :md="12">
-                         <div ref="pieChartRef" class="chart-box"></div>
-                    </el-col>
-                    <el-col :xs="24" :md="12">
-                         <div ref="lineChartRef" class="chart-box"></div>
-                    </el-col>
-                </el-row>
-            </div>
+            <div class="container mx-auto mt-6 mobile-padding max-w-6xl px-4">
+                
+                <!-- 视图 1: 数据看板 -->
+                <div v-if="currentView === 'dashboard'" v-loading="loading">
+                    <!-- 资产卡片 -->
+                    <el-row :gutter="20">
+                        <el-col :xs="24" :sm="8">
+                            <el-card class="bg-gradient-to-br from-blue-500 to-blue-700 text-white border-none">
+                                <div class="text-sm opacity-80">总资产估值 (CNY)</div>
+                                <div class="text-3xl font-bold mt-2">¥ {{ formatMoney(stats.totalCny) }}</div>
+                                <div class="text-xs mt-2 opacity-75">包含预估利息收益</div>
+                            </el-card>
+                        </el-col>
+                        <el-col :xs="12" :sm="8">
+                            <el-card>
+                                <div class="text-sm text-gray-500">美元资产 (USD)</div>
+                                <div class="text-xl font-bold mt-1 text-green-600">$ {{ formatMoney(stats.totalUsd) }}</div>
+                                <div class="text-xs text-gray-400 mt-1">汇率: {{ exchangeRate }}</div>
+                            </el-card>
+                        </el-col>
+                        <el-col :xs="12" :sm="8">
+                            <el-card>
+                                <div class="text-sm text-gray-500">今日更新</div>
+                                <div class="text-xl font-bold mt-1" :class="stats.dailyChange >= 0 ? 'text-red-500' : 'text-green-500'">
+                                    {{ stats.dailyChange >= 0 ? '+' : '' }}{{ formatMoney(stats.dailyChange) }}
+                                </div>
+                                <div class="text-xs text-gray-400 mt-1">{{ todayStr }}</div>
+                            </el-card>
+                        </el-col>
+                    </el-row>
 
-            <div v-if="view === 'admin'">
-                <el-card>
-                    <template #header>
-                        <div class="card-header">
-                            <span>资产列表</span>
-                            <el-button type="primary" @click="openEditModal(null)">新增资产</el-button>
+                    <!-- 图表区域 -->
+                    <el-row :gutter="20" class="mt-4">
+                        <el-col :xs="24" :md="14">
+                            <el-card>
+                                <template #header><div class="font-bold">资产趋势</div></template>
+                                <div id="historyChart" class="chart-container"></div>
+                            </el-card>
+                        </el-col>
+                        <el-col :xs="24" :md="10">
+                            <el-card>
+                                <template #header><div class="font-bold">资产分布</div></template>
+                                <div id="pieChart" class="chart-container"></div>
+                            </el-card>
+                        </el-col>
+                    </el-row>
+                </div>
+
+                <!-- 视图 2: 后台管理 -->
+                <div v-if="currentView === 'admin'">
+                    <el-card>
+                        <div class="flex justify-between items-center mb-4">
+                            <h3 class="font-bold text-lg">资产列表</h3>
+                            <el-button type="primary" @click="openDialog('add')">
+                                <el-icon class="mr-1"><Plus /></el-icon> 新增资产
+                            </el-button>
                         </div>
-                    </template>
-                    <el-table :data="appData.assets" style="width: 100%" stripe>
-                        <el-table-column prop="bank" label="机构" width="100"></el-table-column>
-                        <el-table-column prop="name" label="产品"></el-table-column>
-                        <el-table-column prop="amount" label="本金">
-                             <template #default="scope">{{ scope.row.currency }} {{ scope.row.amount }}</template>
-                        </el-table-column>
-                        <el-table-column prop="type" label="类型" width="80"></el-table-column>
-                        <el-table-column label="操作" width="150" fixed="right">
-                            <template #default="scope">
-                                <el-button size="small" @click="openEditModal(scope.row)">编辑</el-button>
-                                <el-button size="small" type="danger" @click="deleteAsset(scope.$index)">删除</el-button>
-                            </template>
-                        </el-table-column>
-                    </el-table>
-                </el-card>
+                        
+                        <el-table :data="assets" stripe style="width: 100%" v-loading="loading">
+                            <el-table-column prop="bank" label="机构" min-width="100"></el-table-column>
+                            <el-table-column prop="name" label="产品" min-width="120"></el-table-column>
+                            <el-table-column label="金额" min-width="120">
+                                <template #default="scope">
+                                    {{ scope.row.currency === 'USD' ? '$' : '¥' }} {{ formatMoney(scope.row.amount) }}
+                                </template>
+                            </el-table-column>
+                            <el-table-column label="预估收益" min-width="100">
+                                <template #default="scope">
+                                    <span class="text-green-600">+{{ formatMoney(calculateInterest(scope.row)) }}</span>
+                                </template>
+                            </el-table-column>
+                            <el-table-column label="操作" width="150" fixed="right">
+                                <template #default="scope">
+                                    <el-button size="small" @click="openDialog('edit', scope.row)">编辑</el-button>
+                                    <el-button size="small" type="danger" @click="deleteAsset(scope.$index)">删除</el-button>
+                                </template>
+                            </el-table-column>
+                        </el-table>
+                    </el-card>
 
-                <div style="margin-top: 20px; text-align: center;">
-                    <el-button type="success" size="large" @click="syncToGithub" :loading="loading" icon="Upload">保存并同步到 GitHub</el-button>
+                    <div class="flex justify-end mt-4">
+                        <el-button type="success" size="large" @click="saveDataToGithub" :loading="saving">
+                            <el-icon class="mr-2"><Upload /></el-icon> 加密并同步到 GitHub
+                        </el-button>
+                    </div>
                 </div>
             </div>
         </div>
 
-        <el-dialog v-model="showEdit" :title="editingAsset.id ? '编辑资产' : '新增资产'">
-            <el-form :model="editingAsset" label-width="80px">
-                <el-form-item label="机构名称"><el-input v-model="editingAsset.bank" placeholder="微众银行"></el-input></el-form-item>
-                <el-form-item label="产品名称"><el-input v-model="editingAsset.name" placeholder="活期+"></el-input></el-form-item>
-                <el-form-item label="金额"><el-input type="number" v-model.number="editingAsset.amount"></el-input></el-form-item>
-                <el-form-item label="币种">
-                    <el-select v-model="editingAsset.currency"><el-option label="CNY" value="CNY"></el-option><el-option label="USD" value="USD"></el-option></el-select>
+        <!-- 编辑/新增 弹窗 -->
+        <el-dialog v-model="dialogVisible" :title="dialogType === 'add' ? '新增资产' : '编辑资产'" width="500px">
+            <el-form :model="form" label-position="top">
+                <el-row :gutter="20">
+                    <el-col :span="12">
+                        <el-form-item label="机构/银行">
+                            <el-input v-model="form.bank" placeholder="如: 微众银行"></el-input>
+                        </el-form-item>
+                    </el-col>
+                    <el-col :span="12">
+                        <el-form-item label="产品名称">
+                            <el-input v-model="form.name" placeholder="如: 活期+"></el-input>
+                        </el-form-item>
+                    </el-col>
+                </el-row>
+                
+                <el-row :gutter="20">
+                    <el-col :span="12">
+                        <el-form-item label="本金金额">
+                            <el-input-number v-model="form.amount" :min="0" style="width: 100%"></el-input-number>
+                        </el-form-item>
+                    </el-col>
+                    <el-col :span="12">
+                        <el-form-item label="币种">
+                            <el-select v-model="form.currency" style="width: 100%">
+                                <el-option label="CNY - 人民币" value="CNY"></el-option>
+                                <el-option label="USD - 美元" value="USD"></el-option>
+                            </el-select>
+                        </el-form-item>
+                    </el-col>
+                </el-row>
+
+                <el-row :gutter="20">
+                    <el-col :span="12">
+                        <el-form-item label="类型">
+                            <el-select v-model="form.type" style="width: 100%">
+                                <el-option label="活期" value="current"></el-option>
+                                <el-option label="定期" value="fixed"></el-option>
+                            </el-select>
+                        </el-form-item>
+                    </el-col>
+                    <el-col :span="12">
+                        <el-form-item label="年化利率 (%)">
+                            <el-input-number v-model="form.rate" :precision="2" :step="0.1" :max="100" style="width: 100%"></el-input-number>
+                        </el-form-item>
+                    </el-col>
+                </el-row>
+
+                <el-form-item label="起息日期 (计算收益用)">
+                    <el-date-picker v-model="form.startDate" type="date" placeholder="选择日期" style="width: 100%" value-format="YYYY-MM-DD"></el-date-picker>
                 </el-form-item>
-                <el-form-item label="类型">
-                    <el-select v-model="editingAsset.type"><el-option label="活期" value="demand"></el-option><el-option label="定期" value="fixed"></el-option></el-select>
-                </el-form-item>
-                <el-form-item label="年化(%)"><el-input type="number" v-model.number="editingAsset.apy" step="0.01"></el-input></el-form-item>
-                <el-form-item label="起息日"><el-date-picker v-model="editingAsset.start_date" type="date" value-format="YYYY-MM-DD" style="width: 100%"></el-date-picker></el-form-item>
             </el-form>
-            <template #footer><el-button type="primary" @click="saveAsset">确定</el-button></template>
+            <template #footer>
+                <span class="dialog-footer">
+                    <el-button @click="dialogVisible = false">取消</el-button>
+                    <el-button type="primary" @click="confirmForm">确定</el-button>
+                </span>
+            </template>
         </el-dialog>
-
-        <el-button v-if="!showAuth && !isDesktop" class="mobile-fab" type="primary" circle size="large" icon="Menu" @click="view = view === 'dashboard' ? 'admin' : 'dashboard'"></el-button>
     </div>
-
-    <script src="https://cdn.jsdelivr.net/npm/vue@3/dist/vue.global.prod.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/element-plus/dist/index.full.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/echarts@5.4.3/dist/echarts.min.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/crypto-js/4.1.1/crypto-js.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/axios/dist/axios.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@element-plus/icons-vue"></script>
 
     <script>
         const { createApp, ref, reactive, computed, onMounted, nextTick, watch } = Vue;
+        const { ElMessage, ElMessageBox } = ElementPlus;
 
-        const app = createApp({
+        const App = {
             setup() {
-                // --- State ---
-                const showAuth = ref(true);
+                // --- 配置 ---
+                const repoOwner = ref('P1nk64');
+                const repoName = ref('-');
+                const dataPath = ref('data.json');
+                
+                // --- 状态 ---
+                const authorized = ref(false);
+                const inputToken = ref('');
                 const loading = ref(false);
-                const view = ref('dashboard');
-                const showEdit = ref(false);
-                const isDesktop = ref(window.innerWidth > 768);
+                const saving = ref(false);
+                const currentView = ref('dashboard');
+                const dialogVisible = ref(false);
+                const dialogType = ref('add'); // 'add' or 'edit'
+                const currentEditIndex = ref(-1);
                 
-                const auth = reactive({ owner: 'P1nk64', repo: '-', token: localStorage.getItem('gh_pat') || '' });
-                const sha = ref(''); // GitHub File Blob SHA for updates
-                
-                const appData = reactive({
-                    settings: { last_fx_date: '', usd_cny_rate: 7.2 },
-                    history: [],
-                    assets: []
+                // --- 数据核心 ---
+                const fileSha = ref(''); // GitHub 更新文件需要 SHA
+                const assets = ref([]);
+                const history = ref([]);
+                const settings = ref({
+                    exchangeRate: 7.2,
+                    lastRateUpdate: ''
                 });
 
-                const editingAsset = reactive({});
+                // 表单数据
+                const form = reactive({
+                    bank: '', name: '', amount: 0, currency: 'CNY', type: 'current', rate: 0, startDate: ''
+                });
 
-                // --- Crypto Helpers ---
-                const getCryptoKey = () => CryptoJS.SHA256(auth.token).toString(); // Use Hash of PAT as Key
+                // --- 计算属性 ---
+                const todayStr = new Date().toISOString().split('T')[0];
+                
+                const exchangeRate = computed(() => settings.value.exchangeRate);
 
-                const encryptData = (obj) => {
-                    const str = JSON.stringify(obj);
-                    return CryptoJS.AES.encrypt(str, getCryptoKey()).toString();
+                // 计算单项利息
+                const calculateInterest = (asset) => {
+                    if (!asset.startDate || !asset.rate) return 0;
+                    const start = new Date(asset.startDate);
+                    const now = new Date();
+                    const diffTime = Math.abs(now - start);
+                    const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24)); 
+                    // 简单利息计算: 本金 * 利率% * 天数 / 365
+                    return (asset.amount * (asset.rate / 100) * diffDays / 365);
                 };
 
-                const decryptData = (ciphertext) => {
-                    const bytes = CryptoJS.AES.decrypt(ciphertext, getCryptoKey());
-                    return JSON.parse(bytes.toString(CryptoJS.enc.Utf8));
-                };
+                // 统计数据
+                const stats = computed(() => {
+                    let totalCny = 0;
+                    let totalUsd = 0;
+                    
+                    assets.value.forEach(asset => {
+                        const interest = calculateInterest(asset);
+                        const totalVal = asset.amount + interest;
 
-                // --- API & Logic ---
-                const initData = async () => {
-                    loading.value = true;
-                    try {
-                        // 1. Fetch data from GitHub
-                        const url = `https://api.github.com/repos/${auth.owner}/${auth.repo}/contents/data.json`;
-                        const res = await axios.get(url, {
-                            headers: { Authorization: `token ${auth.token}`, Accept: 'application/vnd.github.v3+json' }
-                        });
-                        
-                        sha.value = res.data.sha;
-                        const encryptedContent = decodeURIComponent(escape(window.atob(res.data.content.replace(/\s/g, ''))));
-                        
-                        // 2. Decrypt
-                        try {
-                            const decrypted = decryptData(encryptedContent);
-                            Object.assign(appData, decrypted);
-                            localStorage.setItem('gh_pat', auth.token); // Cache PAT only if success
-                            showAuth.value = false;
-                            
-                            // 3. Post-load tasks
-                            await checkExchangeRate();
-                            updateCharts();
-                        } catch (e) {
-                            ElementPlus.ElMessage.error('解密失败：PAT 错误或数据已损坏');
-                            return;
+                        if (asset.currency === 'USD') {
+                            totalUsd += totalVal;
+                            totalCny += totalVal * exchangeRate.value;
+                        } else {
+                            totalCny += totalVal;
                         }
-                    } catch (error) {
-                        if(error.response && error.response.status === 404) {
-                            // First time init?
-                            ElementPlus.ElMessageBox.confirm('未找到 data.json，是否初始化新仓库？', '初始化', { confirmButtonText: '初始化', cancelButtonText: '取消' })
-                            .then(() => {
-                                showAuth.value = false;
-                                appData.assets = [];
-                                syncToGithub(); // Create file
+                    });
+
+                    // 计算今日盈亏 (对比昨天)
+                    let dailyChange = 0;
+                    if (history.value.length > 0) {
+                        // 寻找昨天的记录
+                        const lastRecord = history.value[history.value.length - 1];
+                        // 如果最后一条记录是今天，则对比倒数第二条
+                        if (lastRecord.date === todayStr && history.value.length > 1) {
+                            dailyChange = totalCny - history.value[history.value.length - 2].totalCny;
+                        } else if (lastRecord.date !== todayStr) {
+                            dailyChange = totalCny - lastRecord.totalCny;
+                        }
+                    }
+
+                    return { totalCny, totalUsd, dailyChange };
+                });
+
+                // --- Crypto 逻辑 ---
+                // 使用 SHA256 将 PAT 转换为 256位 Key
+                const getCryptoKey = (token) => CryptoJS.SHA256(token).toString();
+                
+                const decryptData = (encryptedBase64, token) => {
+                    try {
+                        const key = CryptoJS.enc.Hex.parse(getCryptoKey(token));
+                        const iv = CryptoJS.enc.Hex.parse('00000000000000000000000000000000'); // 简单 IV，如需更高安全可随机生成存入文件
+                        const decrypted = CryptoJS.AES.decrypt(encryptedBase64, key, {
+                            iv: iv,
+                            mode: CryptoJS.mode.CBC,
+                            padding: CryptoJS.pad.Pkcs7
+                        });
+                        const str = decrypted.toString(CryptoJS.enc.Utf8);
+                        if (!str) throw new Error("解密失败，Key可能错误");
+                        return JSON.parse(str);
+                    } catch (e) {
+                        throw new Error("解密失败: 请检查 Token 是否正确");
+                    }
+                };
+
+                const encryptData = (jsonObj, token) => {
+                    const key = CryptoJS.enc.Hex.parse(getCryptoKey(token));
+                    const iv = CryptoJS.enc.Hex.parse('00000000000000000000000000000000');
+                    const encrypted = CryptoJS.AES.encrypt(JSON.stringify(jsonObj), key, {
+                        iv: iv,
+                        mode: CryptoJS.mode.CBC,
+                        padding: CryptoJS.pad.Pkcs7
+                    });
+                    return encrypted.toString();
+                };
+
+                // --- API 交互 ---
+                const fetchExchangeRate = async () => {
+                    if (settings.value.lastRateUpdate === todayStr) return; // 今天已更新
+                    try {
+                        const res = await axios.get('https://api.exchangerate-api.com/v4/latest/USD');
+                        if (res.data && res.data.rates && res.data.rates.CNY) {
+                            settings.value.exchangeRate = res.data.rates.CNY;
+                            settings.value.lastRateUpdate = todayStr;
+                            console.log("汇率已更新:", settings.value.exchangeRate);
+                        }
+                    } catch (e) {
+                        console.error("汇率获取失败，使用旧值");
+                    }
+                };
+
+                const handleLogin = async () => {
+                    if (!inputToken.value) return ElMessage.warning("请输入 Token");
+                    loading.value = true;
+                    
+                    try {
+                        const url = `https://api.github.com/repos/${repoOwner.value}/${repoName.value}/contents/${dataPath.value}`;
+                        const headers = { Authorization: `token ${inputToken.value}`, Accept: 'application/vnd.github.v3+json' };
+                        
+                        const res = await axios.get(url, { headers });
+                        fileSha.value = res.data.sha;
+                        
+                        // GitHub 返回的内容通常是 Base64 编码的 (content字段)，但里面存的是我们加密后的 Base64 字符串
+                        // 注意：res.data.content 包含换行符，需要清理
+                        const rawContent = res.data.content.replace(/\n/g, '');
+                        // 解码 GitHub 的 Base64 得到 "加密密文"
+                        const encryptedStr = atob(rawContent);
+                        
+                        // 解密密文
+                        const data = decryptData(encryptedStr, inputToken.value);
+                        
+                        // 赋值
+                        assets.value = data.assets || [];
+                        history.value = data.history || [];
+                        settings.value = data.settings || settings.value;
+
+                        authorized.value = true;
+                        ElMessage.success("登录成功");
+                        
+                        // 后置处理：汇率 & 快照
+                        await fetchExchangeRate();
+                        recordSnapshot();
+                        
+                        // 初始化图表
+                        nextTick(() => {
+                            initCharts();
+                        });
+
+                    } catch (e) {
+                        console.error(e);
+                        if (e.response && e.response.status === 404) {
+                            ElMessageBox.confirm('未找到数据文件，是否初始化仓库？', '初始化', {
+                                confirmButtonText: '初始化',
+                                cancelButtonText: '取消',
+                                type: 'warning',
+                            }).then(() => {
+                                initRepo();
                             });
                         } else {
-                            ElementPlus.ElMessage.error('GitHub API 访问失败: ' + (error.response?.data?.message || error.message));
+                            ElMessage.error(e.message || "登录失败，请检查 Token 或网络");
                         }
                     } finally {
                         loading.value = false;
                     }
                 };
 
-                const checkExchangeRate = async () => {
-                    const today = new Date().toISOString().split('T')[0];
-                    if (appData.settings.last_fx_date !== today) {
-                        try {
-                            // Free API (No key required for standard rate limit)
-                            const res = await axios.get('https://open.er-api.com/v6/latest/USD');
-                            if (res.data && res.data.rates && res.data.rates.CNY) {
-                                appData.settings.usd_cny_rate = res.data.rates.CNY;
-                                appData.settings.last_fx_date = today;
-                                // Save snapshot to history automatically when rate updates (daily)
-                                snapshotHistory();
-                                syncToGithub(true); // Silent sync
-                            }
-                        } catch (e) {
-                            console.error("Rate update failed", e);
-                        }
+                const recordSnapshot = () => {
+                    const last = history.value[history.value.length - 1];
+                    // 如果今天还没有记录，或者需要更新今天的记录
+                    const snapshot = {
+                        date: todayStr,
+                        totalCny: stats.value.totalCny,
+                        totalUsd: stats.value.totalUsd
+                    };
+
+                    if (!last || last.date !== todayStr) {
+                        history.value.push(snapshot);
+                    } else {
+                        // 更新今天的最新值
+                        history.value[history.value.length - 1] = snapshot;
                     }
                 };
 
-                const snapshotHistory = () => {
-                    const today = new Date().toISOString().split('T')[0];
-                    // Avoid duplicate entry for today
-                    if (appData.history.length > 0 && appData.history[appData.history.length - 1].date === today) return;
-                    
-                    appData.history.push({
-                        date: today,
-                        total_cny: metrics.value.totalAssets
-                    });
-                    // Keep last 30 days only to save size
-                    if (appData.history.length > 30) appData.history.shift();
-                };
-
-                const syncToGithub = async (silent = false) => {
-                    if(!silent) loading.value = true;
+                const saveDataToGithub = async () => {
+                    saving.value = true;
                     try {
-                        const content = encryptData(appData);
-                        const b64Content = window.btoa(unescape(encodeURIComponent(content)));
+                        recordSnapshot(); // 保存前更新快照
                         
-                        const url = `https://api.github.com/repos/${auth.owner}/${auth.repo}/contents/data.json`;
-                        const payload = {
-                            message: `Update data: ${new Date().toISOString()}`,
-                            content: b64Content,
-                            sha: sha.value || undefined // Undefined if creating new file
+                        const fullData = {
+                            settings: settings.value,
+                            assets: assets.value,
+                            history: history.value
                         };
 
-                        const res = await axios.put(url, payload, {
-                            headers: { Authorization: `token ${auth.token}` }
-                        });
-                        sha.value = res.data.content.sha;
-                        if(!silent) ElementPlus.ElMessage.success('保存成功！');
-                    } catch (e) {
-                        ElementPlus.ElMessage.error('保存失败: ' + e.message);
-                    } finally {
-                        loading.value = false;
-                    }
-                };
+                        const encrypted = encryptData(fullData, inputToken.value);
+                        // GitHub API 需要 Base64 编码的内容
+                        const contentBase64 = btoa(encrypted);
 
-                // --- Calculations ---
-                const metrics = computed(() => {
-                    let totalAssets = 0;
-                    let totalInterest = 0;
-                    const rate = appData.settings.usd_cny_rate;
-
-                    appData.assets.forEach(asset => {
-                        let val = asset.amount;
-                        let interest = 0;
+                        const url = `https://api.github.com/repos/${repoOwner.value}/${repoName.value}/contents/${dataPath.value}`;
+                        const body = {
+                            message: `Update assets: ${todayStr}`,
+                            content: contentBase64,
+                            sha: fileSha.value
+                        };
                         
-                        // Interest Calc
-                        if (asset.type === 'fixed' && asset.apy && asset.start_date) {
-                            const start = new Date(asset.start_date);
-                            const now = new Date();
-                            const days = Math.max(0, (now - start) / (1000 * 60 * 60 * 24));
-                            interest = val * (asset.apy / 100) * (days / 365);
-                        }
-
-                        // Convert to CNY
-                        if (asset.currency === 'USD') {
-                            val = val * rate;
-                            interest = interest * rate;
-                        }
-
-                        totalAssets += val + interest;
-                        totalInterest += interest;
-                    });
-
-                    return { totalAssets, totalInterest };
-                });
-
-                // --- Charting ---
-                const pieChartRef = ref(null);
-                const lineChartRef = ref(null);
-                let pieChart = null, lineChart = null;
-
-                const updateCharts = async () => {
-                    await nextTick();
-                    if (!pieChartRef.value || !lineChartRef.value) return;
-
-                    // Init
-                    if (!pieChart) pieChart = echarts.init(pieChartRef.value);
-                    if (!lineChart) lineChart = echarts.init(lineChartRef.value);
-
-                    // Pie Data
-                    const pieData = appData.assets.map(a => ({
-                        value: a.amount * (a.currency === 'USD' ? appData.settings.usd_cny_rate : 1),
-                        name: a.name
-                    }));
-
-                    pieChart.setOption({
-                        title: { text: '资产分布', left: 'center' },
-                        tooltip: { trigger: 'item' },
-                        series: [{ type: 'pie', radius: '50%', data: pieData }]
-                    });
-
-                    // Line Data
-                    const dates = appData.history.map(h => h.date);
-                    const values = appData.history.map(h => h.total_cny);
-
-                    lineChart.setOption({
-                        title: { text: '资产趋势', left: 'center' },
-                        xAxis: { type: 'category', data: dates },
-                        yAxis: { type: 'value' },
-                        series: [{ data: values, type: 'line', smooth: true }]
-                    });
-                    
-                    window.addEventListener('resize', () => {
-                        pieChart.resize();
-                        lineChart.resize();
-                    });
-                };
-
-                watch(view, (newVal) => {
-                   if(newVal === 'dashboard') setTimeout(updateCharts, 100); 
-                });
-
-                // --- CRUD Handlers ---
-                const openEditModal = (row) => {
-                    if (row) Object.assign(editingAsset, JSON.parse(JSON.stringify(row))); // Deep copy
-                    else Object.assign(editingAsset, { id: Date.now(), currency: 'CNY', type: 'demand' }); // New
-                    showEdit.value = true;
-                };
-
-                const saveAsset = () => {
-                    if (editingAsset.id) {
-                        const idx = appData.assets.findIndex(a => a.id === editingAsset.id);
-                        if (idx > -1) appData.assets[idx] = { ...editingAsset };
-                        else appData.assets.push({ ...editingAsset });
+                        const res = await axios.put(url, body, {
+                            headers: { Authorization: `token ${inputToken.value}` }
+                        });
+                        
+                        fileSha.value = res.data.content.sha; // 更新 SHA 以备下次保存
+                        ElMessage.success("同步成功");
+                    } catch (e) {
+                        ElMessage.error("同步失败: " + e.message);
+                    } finally {
+                        saving.value = false;
                     }
-                    showEdit.value = false;
-                    updateCharts();
+                };
+
+                // --- CRUD ---
+                const openDialog = (type, row = null) => {
+                    dialogType.value = type;
+                    dialogVisible.value = true;
+                    if (type === 'edit' && row) {
+                        Object.assign(form, row);
+                        currentEditIndex.value = assets.value.indexOf(row);
+                    } else {
+                        Object.assign(form, { bank: '', name: '', amount: 0, currency: 'CNY', type: 'current', rate: 0, startDate: todayStr });
+                    }
+                };
+
+                const confirmForm = () => {
+                    if (dialogType.value === 'add') {
+                        assets.value.push({ ...form });
+                    } else {
+                        assets.value[currentEditIndex.value] = { ...form };
+                    }
+                    dialogVisible.value = false;
+                    ElMessage.success("本地数据已更新，请记得同步到 GitHub");
                 };
 
                 const deleteAsset = (index) => {
-                    ElementPlus.ElMessageBox.confirm('确定删除该资产吗？')
-                        .then(() => {
-                            appData.assets.splice(index, 1);
-                            updateCharts();
+                    assets.value.splice(index, 1);
+                };
+
+                // --- Charts ---
+                let historyChartInst = null;
+                let pieChartInst = null;
+
+                const initCharts = () => {
+                    const chartDom1 = document.getElementById('historyChart');
+                    const chartDom2 = document.getElementById('pieChart');
+                    if (!chartDom1 || !chartDom2) return;
+
+                    historyChartInst = echarts.init(chartDom1);
+                    pieChartInst = echarts.init(chartDom2);
+                    
+                    renderCharts();
+                };
+
+                const renderCharts = () => {
+                    if (!historyChartInst || !pieChartInst) return;
+
+                    // 1. History Chart
+                    const dates = history.value.map(h => h.date);
+                    const values = history.value.map(h => h.totalCny.toFixed(0));
+
+                    historyChartInst.setOption({
+                        tooltip: { trigger: 'axis' },
+                        grid: { left: '3%', right: '4%', bottom: '3%', containLabel: true },
+                        xAxis: { type: 'category', data: dates },
+                        yAxis: { type: 'value' },
+                        series: [{ data: values, type: 'line', smooth: true, areaStyle: {}, color: '#409EFF' }]
+                    });
+
+                    // 2. Pie Chart
+                    // 按机构汇总
+                    const bankData = {};
+                    assets.value.forEach(a => {
+                        const val = a.currency === 'USD' ? (a.amount * exchangeRate.value) : a.amount;
+                        bankData[a.bank] = (bankData[a.bank] || 0) + val;
+                    });
+                    const pieData = Object.keys(bankData).map(k => ({ value: bankData[k].toFixed(0), name: k }));
+
+                    pieChartInst.setOption({
+                        tooltip: { trigger: 'item' },
+                        legend: { bottom: '0%' },
+                        series: [{
+                            name: '资产分布',
+                            type: 'pie',
+                            radius: ['40%', '70%'],
+                            avoidLabelOverlap: false,
+                            itemStyle: { borderRadius: 10, borderColor: '#fff', borderWidth: 2 },
+                            data: pieData
+                        }]
+                    });
+                };
+
+                // 监听数据变化重新渲染图表
+                watch(() => assets.value, () => {
+                    if(currentView.value === 'dashboard') {
+                        nextTick(renderCharts);
+                    }
+                }, { deep: true });
+                
+                watch(currentView, (newVal) => {
+                    if (newVal === 'dashboard') {
+                        nextTick(() => {
+                            if (!historyChartInst) initCharts();
+                            else {
+                                historyChartInst.resize();
+                                pieChartInst.resize();
+                                renderCharts();
+                            }
                         });
-                };
+                    }
+                });
 
+                // 窗口大小调整
+                window.addEventListener('resize', () => {
+                    historyChartInst && historyChartInst.resize();
+                    pieChartInst && pieChartInst.resize();
+                });
+
+                // 初始化仓库（如果404）
+                const initRepo = async () => {
+                    // 创建初始空结构
+                    assets.value = [];
+                    history.value = [];
+                    await saveDataToGithub(); // 创建新文件不需要 SHA
+                    authorized.value = true;
+                    ElMessage.success("仓库初始化成功！");
+                };
+                
                 const logout = () => {
-                    showAuth.value = true;
-                    auth.token = '';
-                    localStorage.removeItem('gh_pat');
+                    authorized.value = false;
+                    inputToken.value = '';
+                    assets.value = [];
                 };
 
-                const formatMoney = (num) => num.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+                const formatMoney = (val) => {
+                    return val.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+                };
 
                 return {
-                    auth, showAuth, loading, view, isDesktop, appData, metrics,
-                    pieChartRef, lineChartRef, showEdit, editingAsset,
-                    initData, syncToGithub, openEditModal, saveAsset, deleteAsset, logout, formatMoney
+                    repoOwner, repoName, dataPath,
+                    inputToken, authorized, loading, saving,
+                    currentView, stats, exchangeRate, todayStr,
+                    assets, form, dialogVisible, dialogType,
+                    handleLogin, saveDataToGithub,
+                    openDialog, confirmForm, deleteAsset,
+                    formatMoney, calculateInterest, logout
                 };
             }
-        });
+        };
 
-        // Register Icons
+        const app = createApp(App);
+        app.use(ElementPlus);
         for (const [key, component] of Object.entries(ElementPlusIconsVue)) {
             app.component(key, component)
         }
-        app.use(ElementPlus);
         app.mount('#app');
     </script>
 </body>
