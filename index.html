@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>加密资产管家</title>
+    <title>加密资产管家 (Serverless)</title>
     
     <!-- 核心依赖 CDN -->
     <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
@@ -18,13 +18,19 @@
     <link rel="stylesheet" href="https://unpkg.com/element-plus/dist/index.css" />
 
     <style>
-        body { font-family: 'Helvetica Neue', Helvetica, 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', '微软雅黑', Arial, sans-serif; background-color: #f3f4f6; }
+        body { font-family: 'Helvetica Neue', Helvetica, 'PingFang SC', 'Microsoft YaHei', Arial, sans-serif; background-color: #f3f4f6; }
         .chart-container { width: 100%; height: 350px; }
-        .el-card { border-radius: 12px; margin-bottom: 20px; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1); }
-        /* 移动端优化 */
+        .el-card { border-radius: 12px; margin-bottom: 16px; box-shadow: 0 2px 6px rgba(0,0,0,0.05); }
+        .stat-val { font-family: 'DIN Alternate', 'Roboto', sans-serif; }
+        
+        /* 移动端优化表格 */
+        .asset-table .cell { padding: 0 8px !important; }
+        .asset-name-col .cell { line-height: 1.4; }
+        
         @media (max-width: 768px) {
             .mobile-padding { padding: 10px; }
-            .el-dialog { width: 90% !important; }
+            .el-dialog { width: 90% !important; margin-top: 10vh !important; }
+            .hide-on-mobile { display: none; }
         }
     </style>
 </head>
@@ -35,26 +41,25 @@
         <div v-if="!authorized" class="flex items-center justify-center min-h-screen bg-gray-900 px-4">
             <el-card class="w-full max-w-md text-center py-8">
                 <h2 class="text-2xl font-bold mb-6 text-gray-700">安全资产访问</h2>
-                <el-input v-model="inputToken" type="password" placeholder="请输入 GitHub Personal Access Token (PAT)" show-password class="mb-4"></el-input>
+                <el-input v-model="inputToken" type="password" placeholder="请输入 GitHub Personal Access Token" show-password class="mb-4"></el-input>
                 
                 <div class="text-left text-xs text-gray-500 mb-4">
-                    <p>配置: {{ repoOwner }}/{{ repoName }}</p>
-                    <p>文件: {{ dataPath }}</p>
+                    <p>仓库: {{ repoOwner }}/{{ repoName }}</p>
+                    <p>路径: {{ dataPath }}</p>
                 </div>
 
                 <el-button type="primary" class="w-full" :loading="loading" @click="handleLogin" size="large">
                     <el-icon class="mr-2"><Key /></el-icon> 解密并进入
                 </el-button>
-                <p class="mt-4 text-xs text-gray-400">密钥仅用于本地 AES 解密，不会发送至除 GitHub API 外的任何服务器。</p>
             </el-card>
         </div>
 
         <!-- 主应用界面 (授权后显示) -->
         <div v-else class="pb-20">
             <!-- 顶部导航 -->
-            <el-menu mode="horizontal" :ellipsis="false" class="px-4 flex items-center justify-between sticky top-0 z-50 shadow-sm">
-                <div class="font-bold text-xl text-blue-600 flex items-center">
-                    <el-icon class="mr-2"><Wallet /></el-icon> 资产管家
+            <el-menu mode="horizontal" :ellipsis="false" class="px-4 flex items-center justify-between sticky top-0 z-50 shadow-sm bg-white">
+                <div class="font-bold text-lg text-blue-600 flex items-center">
+                    <el-icon class="mr-2"><Wallet /></el-icon> P1nk64 Assets
                 </div>
                 <div class="flex gap-2">
                     <el-button :type="currentView === 'dashboard' ? 'primary' : ''" link @click="currentView = 'dashboard'">看板</el-button>
@@ -63,48 +68,64 @@
                 </div>
             </el-menu>
 
-            <div class="container mx-auto mt-6 mobile-padding max-w-6xl px-4">
+            <div class="container mx-auto mt-4 mobile-padding max-w-6xl px-2 sm:px-4">
                 
                 <!-- 视图 1: 数据看板 -->
-                <div v-if="currentView === 'dashboard'" v-loading="loading">
-                    <!-- 资产卡片 -->
-                    <el-row :gutter="20">
-                        <el-col :xs="24" :sm="8">
-                            <el-card class="bg-gradient-to-br from-blue-500 to-blue-700 text-white border-none">
-                                <div class="text-sm opacity-80">总资产估值 (CNY)</div>
-                                <div class="text-3xl font-bold mt-2">¥ {{ formatMoney(stats.totalCny) }}</div>
-                                <div class="text-xs mt-2 opacity-75">包含预估利息收益</div>
+                <div v-show="currentView === 'dashboard'" v-loading="loading && !fileSha"> 
+                    <!-- v-show 保持 DOM 存在，解决 echarts 切换不显示问题 -->
+                    
+                    <!-- 资产卡片组 -->
+                    <el-row :gutter="12">
+                        <!-- 总资产 -->
+                        <el-col :xs="24" :sm="6">
+                            <el-card class="bg-gradient-to-r from-blue-600 to-blue-500 text-white border-none mb-3">
+                                <div class="text-xs opacity-80">总资产估值 (CNY)</div>
+                                <div class="text-2xl font-bold mt-1 stat-val">¥ {{ formatMoney(stats.totalCnyVal) }}</div>
                             </el-card>
                         </el-col>
-                        <el-col :xs="12" :sm="8">
-                            <el-card>
-                                <div class="text-sm text-gray-500">美元资产 (USD)</div>
-                                <div class="text-xl font-bold mt-1 text-green-600">$ {{ formatMoney(stats.totalUsd) }}</div>
-                                <div class="text-xs text-gray-400 mt-1">汇率: {{ exchangeRate }}</div>
+                        
+                        <!-- 人民币资产 -->
+                        <el-col :xs="12" :sm="6">
+                            <el-card class="bg-white">
+                                <div class="text-xs text-gray-500">人民币资产 (CNY)</div>
+                                <div class="text-lg font-bold mt-1 text-gray-800 stat-val">¥ {{ formatMoney(stats.cnyAssets) }}</div>
                             </el-card>
                         </el-col>
-                        <el-col :xs="12" :sm="8">
-                            <el-card>
-                                <div class="text-sm text-gray-500">今日更新</div>
-                                <div class="text-xl font-bold mt-1" :class="stats.dailyChange >= 0 ? 'text-red-500' : 'text-green-500'">
-                                    {{ stats.dailyChange >= 0 ? '+' : '' }}{{ formatMoney(stats.dailyChange) }}
+
+                        <!-- 美元资产 -->
+                        <el-col :xs="12" :sm="6">
+                            <el-card class="bg-white">
+                                <div class="text-xs text-gray-500">美元资产 (USD)</div>
+                                <div class="text-lg font-bold mt-1 text-green-600 stat-val">$ {{ formatMoney(stats.usdAssets) }}</div>
+                                <div class="text-[10px] text-gray-400 mt-1 scale-90 origin-left">汇率: {{ exchangeRate }}</div>
+                            </el-card>
+                        </el-col>
+
+                        <!-- 今日盈亏 -->
+                        <el-col :xs="24" :sm="6">
+                            <el-card class="bg-white">
+                                <div class="text-xs text-gray-500">今日盈亏 (估算)</div>
+                                <div class="flex items-end justify-between">
+                                    <div class="text-xl font-bold mt-1 stat-val" :class="stats.dailyChange >= 0 ? 'text-red-500' : 'text-green-500'">
+                                        {{ stats.dailyChange >= 0 ? '+' : '' }}{{ formatMoney(stats.dailyChange) }}
+                                    </div>
+                                    <div class="text-[10px] text-gray-400 mb-1">{{ todayStr }}</div>
                                 </div>
-                                <div class="text-xs text-gray-400 mt-1">{{ todayStr }}</div>
                             </el-card>
                         </el-col>
                     </el-row>
 
                     <!-- 图表区域 -->
-                    <el-row :gutter="20" class="mt-4">
+                    <el-row :gutter="12">
                         <el-col :xs="24" :md="14">
                             <el-card>
-                                <template #header><div class="font-bold">资产趋势</div></template>
+                                <template #header><div class="font-bold text-sm">资产趋势</div></template>
                                 <div id="historyChart" class="chart-container"></div>
                             </el-card>
                         </el-col>
                         <el-col :xs="24" :md="10">
                             <el-card>
-                                <template #header><div class="font-bold">资产分布</div></template>
+                                <template #header><div class="font-bold text-sm">资产分布</div></template>
                                 <div id="pieChart" class="chart-container"></div>
                             </el-card>
                         </el-col>
@@ -116,48 +137,71 @@
                     <el-card>
                         <div class="flex justify-between items-center mb-4">
                             <h3 class="font-bold text-lg">资产列表</h3>
-                            <el-button type="primary" @click="openDialog('add')">
-                                <el-icon class="mr-1"><Plus /></el-icon> 新增资产
-                            </el-button>
+                            <div class="flex gap-2">
+                                <span v-if="saving" class="text-xs text-gray-500 flex items-center">
+                                    <el-icon class="is-loading mr-1"><Loading /></el-icon> 自动同步中...
+                                </span>
+                                <el-button type="primary" size="small" @click="openDialog('add')" :disabled="saving">
+                                    <el-icon><Plus /></el-icon> 新增
+                                </el-button>
+                            </div>
                         </div>
                         
-                        <el-table :data="assets" stripe style="width: 100%" v-loading="loading">
-                            <el-table-column prop="bank" label="机构" min-width="100"></el-table-column>
-                            <el-table-column prop="name" label="产品" min-width="120"></el-table-column>
-                            <el-table-column label="金额" min-width="120">
+                        <el-table :data="assets" stripe style="width: 100%" v-loading="loading || saving" class="asset-table">
+                            <!-- 合并列: 机构与产品 -->
+                            <el-table-column label="产品名称" min-width="130" class-name="asset-name-col">
                                 <template #default="scope">
-                                    {{ scope.row.currency === 'USD' ? '$' : '¥' }} {{ formatMoney(scope.row.amount) }}
+                                    <div class="font-medium text-gray-800">{{ scope.row.bank }}</div>
+                                    <div class="text-xs text-gray-400">{{ scope.row.name }}</div>
+                                    <el-tag size="small" effect="plain" class="mt-1 scale-90 origin-left">
+                                        {{ scope.row.type === 'fixed' ? '定期' : '理财' }}
+                                    </el-tag>
                                 </template>
                             </el-table-column>
-                            <el-table-column label="预估收益" min-width="100">
+                            
+                            <el-table-column label="金额" min-width="110" align="right">
                                 <template #default="scope">
-                                    <span class="text-green-600">+{{ formatMoney(calculateInterest(scope.row)) }}</span>
+                                    <div class="font-bold stat-val text-gray-700">
+                                        {{ scope.row.currency === 'USD' ? '$' : '¥' }} {{ formatMoney(scope.row.amount) }}
+                                    </div>
                                 </template>
                             </el-table-column>
-                            <el-table-column label="操作" width="150" fixed="right">
+                            
+                            <el-table-column label="今日收益" min-width="90" align="right">
                                 <template #default="scope">
-                                    <el-button size="small" @click="openDialog('edit', scope.row)">编辑</el-button>
-                                    <el-button size="small" type="danger" @click="deleteAsset(scope.$index)">删除</el-button>
+                                    <div v-if="scope.row.type === 'fixed'" class="text-red-500 text-xs stat-val">
+                                        +{{ formatMoney(calculateDailyReturn(scope.row)) }}
+                                    </div>
+                                    <div v-else class="text-gray-300 text-xs">
+                                        -
+                                    </div>
+                                </template>
+                            </el-table-column>
+                            
+                            <el-table-column label="操作" width="60" align="center" fixed="right">
+                                <template #default="scope">
+                                    <el-button link type="primary" @click="openDialog('edit', scope.row)">
+                                        <el-icon class="text-lg"><Edit /></el-icon>
+                                    </el-button>
                                 </template>
                             </el-table-column>
                         </el-table>
                     </el-card>
-
-                    <div class="flex justify-end mt-4">
-                        <el-button type="success" size="large" @click="saveDataToGithub" :loading="saving">
-                            <el-icon class="mr-2"><Upload /></el-icon> 加密并同步到 GitHub
-                        </el-button>
-                    </div>
                 </div>
             </div>
         </div>
 
         <!-- 编辑/新增 弹窗 -->
-        <el-dialog v-model="dialogVisible" :title="dialogType === 'add' ? '新增资产' : '编辑资产'" width="500px">
+        <el-dialog 
+            v-model="dialogVisible" 
+            :title="dialogType === 'add' ? '新增资产' : '编辑资产'" 
+            width="500px"
+            destroy-on-close
+        >
             <el-form :model="form" label-position="top">
-                <el-row :gutter="20">
+                <el-row :gutter="15">
                     <el-col :span="12">
-                        <el-form-item label="机构/银行">
+                        <el-form-item label="机构名称">
                             <el-input v-model="form.bank" placeholder="如: 微众银行"></el-input>
                         </el-form-item>
                     </el-col>
@@ -168,10 +212,10 @@
                     </el-col>
                 </el-row>
                 
-                <el-row :gutter="20">
+                <el-row :gutter="15">
                     <el-col :span="12">
-                        <el-form-item label="本金金额">
-                            <el-input-number v-model="form.amount" :min="0" style="width: 100%"></el-input-number>
+                        <el-form-item label="持有金额 (当前价值)">
+                            <el-input-number v-model="form.amount" :min="0" :controls="false" style="width: 100%" class="text-left"></el-input-number>
                         </el-form-item>
                     </el-col>
                     <el-col :span="12">
@@ -184,42 +228,61 @@
                     </el-col>
                 </el-row>
 
-                <el-row :gutter="20">
-                    <el-col :span="12">
-                        <el-form-item label="类型">
-                            <el-select v-model="form.type" style="width: 100%">
-                                <el-option label="活期" value="current"></el-option>
-                                <el-option label="定期" value="fixed"></el-option>
-                            </el-select>
-                        </el-form-item>
-                    </el-col>
-                    <el-col :span="12">
-                        <el-form-item label="年化利率 (%)">
-                            <el-input-number v-model="form.rate" :precision="2" :step="0.1" :max="100" style="width: 100%"></el-input-number>
-                        </el-form-item>
-                    </el-col>
-                </el-row>
-
-                <el-form-item label="起息日期 (计算收益用)">
-                    <el-date-picker v-model="form.startDate" type="date" placeholder="选择日期" style="width: 100%" value-format="YYYY-MM-DD"></el-date-picker>
+                <el-form-item label="资产类型">
+                    <el-radio-group v-model="form.type">
+                        <el-radio-button label="fixed">定期存款 (自动算息)</el-radio-button>
+                        <el-radio-button label="wealth">理财产品 (手动维护)</el-radio-button>
+                    </el-radio-group>
                 </el-form-item>
+
+                <!-- 定期才显示的字段 -->
+                <div v-if="form.type === 'fixed'" class="bg-blue-50 p-3 rounded mb-4">
+                    <el-row :gutter="15">
+                        <el-col :span="12">
+                            <el-form-item label="年化利率 (%)" class="mb-0">
+                                <el-input-number v-model="form.rate" :precision="2" :step="0.05" :max="100" :controls="false" style="width: 100%"></el-input-number>
+                            </el-form-item>
+                        </el-col>
+                        <el-col :span="12">
+                            <el-form-item label="起息日 (备忘)" class="mb-0">
+                                <el-date-picker v-model="form.startDate" type="date" placeholder="选择日期" style="width: 100%" value-format="YYYY-MM-DD"></el-date-picker>
+                            </el-form-item>
+                        </el-col>
+                    </el-row>
+                </div>
+                <div v-else class="text-xs text-gray-400 mb-4">
+                    * 理财产品每日净值波动，请每日手动更新“持有金额”，系统将根据差额计算当日盈亏。
+                </div>
+
             </el-form>
             <template #footer>
-                <span class="dialog-footer">
-                    <el-button @click="dialogVisible = false">取消</el-button>
-                    <el-button type="primary" @click="confirmForm">确定</el-button>
-                </span>
+                <div class="flex justify-between w-full">
+                    <el-button 
+                        v-if="dialogType === 'edit'" 
+                        type="danger" 
+                        plain 
+                        @click="handleDelete"
+                    >
+                        删除
+                    </el-button>
+                    <div v-else></div> <!-- 占位 -->
+                    
+                    <div>
+                        <el-button @click="dialogVisible = false">取消</el-button>
+                        <el-button type="primary" @click="confirmForm" :loading="saving">保存并同步</el-button>
+                    </div>
+                </div>
             </template>
         </el-dialog>
     </div>
 
     <script>
-        const { createApp, ref, reactive, computed, onMounted, nextTick, watch } = Vue;
+        const { createApp, ref, reactive, computed, nextTick, watch } = Vue;
         const { ElMessage, ElMessageBox } = ElementPlus;
 
         const App = {
             setup() {
-                // --- 配置 ---
+                // --- 配置区 (首次使用可修改) ---
                 const repoOwner = ref('P1nk64');
                 const repoName = ref('-');
                 const dataPath = ref('data.json');
@@ -230,220 +293,197 @@
                 const loading = ref(false);
                 const saving = ref(false);
                 const currentView = ref('dashboard');
+                
+                // 弹窗相关
                 const dialogVisible = ref(false);
-                const dialogType = ref('add'); // 'add' or 'edit'
+                const dialogType = ref('add'); 
                 const currentEditIndex = ref(-1);
                 
-                // --- 数据核心 ---
-                const fileSha = ref(''); // GitHub 更新文件需要 SHA
+                // 数据模型
+                const fileSha = ref(''); 
                 const assets = ref([]);
                 const history = ref([]);
                 const settings = ref({
-                    exchangeRate: 7.2,
+                    exchangeRate: 7.25,
                     lastRateUpdate: ''
                 });
 
-                // 表单数据
+                // 表单
                 const form = reactive({
-                    bank: '', name: '', amount: 0, currency: 'CNY', type: 'current', rate: 0, startDate: ''
+                    bank: '', name: '', amount: 0, currency: 'CNY', type: 'fixed', rate: 0, startDate: ''
                 });
 
-                // --- 计算属性 ---
                 const todayStr = new Date().toISOString().split('T')[0];
                 
+                // --- 计算属性 ---
                 const exchangeRate = computed(() => settings.value.exchangeRate);
 
-                // 计算单项利息
-                const calculateInterest = (asset) => {
-                    if (!asset.startDate || !asset.rate) return 0;
-                    const start = new Date(asset.startDate);
-                    const now = new Date();
-                    const diffTime = Math.abs(now - start);
-                    const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24)); 
-                    // 简单利息计算: 本金 * 利率% * 天数 / 365
-                    return (asset.amount * (asset.rate / 100) * diffDays / 365);
+                // 计算单日收益 (仅针对定期)
+                // 定期: 本金 * 利率% / 365
+                const calculateDailyReturn = (asset) => {
+                    if (asset.type !== 'fixed' || !asset.rate) return 0;
+                    return (asset.amount * (asset.rate / 100) / 365);
                 };
 
-                // 统计数据
+                // 全局统计
                 const stats = computed(() => {
-                    let totalCny = 0;
-                    let totalUsd = 0;
+                    let cnyAssets = 0;
+                    let usdAssets = 0;
+                    let totalDailyInterest = 0; // 当日产生的定期利息
                     
                     assets.value.forEach(asset => {
-                        const interest = calculateInterest(asset);
-                        const totalVal = asset.amount + interest;
-
+                        // 1. 累计各类资产本金
                         if (asset.currency === 'USD') {
-                            totalUsd += totalVal;
-                            totalCny += totalVal * exchangeRate.value;
+                            usdAssets += asset.amount;
                         } else {
-                            totalCny += totalVal;
+                            cnyAssets += asset.amount;
+                        }
+
+                        // 2. 如果是定期，把【今日】产生的利息加上去展示（因为本金还没变，但我们想看到今天赚了多少）
+                        // 注意：这里我们仅做展示加成，不修改 asset.amount
+                        if (asset.type === 'fixed') {
+                            const interest = calculateDailyReturn(asset);
+                            totalDailyInterest += (asset.currency === 'USD' ? interest * exchangeRate.value : interest);
                         }
                     });
 
-                    // 计算今日盈亏 (对比昨天)
+                    // 总资产估值 (CNY) = CNY本金 + USD本金转CNY + 当日定期预估收益
+                    // 注意：理财产品的波动已经体现在 asset.amount 里了（因为是手动录入最新值）
+                    const totalCnyVal = cnyAssets + (usdAssets * exchangeRate.value) + totalDailyInterest;
+
+                    // 计算今日盈亏
+                    // 逻辑：今天当前总资产 - 昨天历史记录的总资产
                     let dailyChange = 0;
                     if (history.value.length > 0) {
-                        // 寻找昨天的记录
                         const lastRecord = history.value[history.value.length - 1];
-                        // 如果最后一条记录是今天，则对比倒数第二条
-                        if (lastRecord.date === todayStr && history.value.length > 1) {
-                            dailyChange = totalCny - history.value[history.value.length - 2].totalCny;
-                        } else if (lastRecord.date !== todayStr) {
-                            dailyChange = totalCny - lastRecord.totalCny;
+                        
+                        // 如果历史记录里最后一条是【今天】（可能刚刚保存过），那么我们要找【昨天】的记录来对比
+                        if (lastRecord.date === todayStr) {
+                            if (history.value.length > 1) {
+                                const yesterdayRecord = history.value[history.value.length - 2];
+                                dailyChange = totalCnyVal - yesterdayRecord.totalCny;
+                            } else {
+                                // 只有今天一条记录，无法计算盈亏，设为0或当前收益
+                                dailyChange = totalDailyInterest; 
+                            }
+                        } else {
+                            // 最后一条是昨天的
+                            dailyChange = totalCnyVal - lastRecord.totalCny;
                         }
                     }
 
-                    return { totalCny, totalUsd, dailyChange };
+                    return { 
+                        cnyAssets, 
+                        usdAssets, 
+                        totalCnyVal, 
+                        dailyChange 
+                    };
                 });
 
-                // --- Crypto 逻辑 ---
-                // 使用 SHA256 将 PAT 转换为 256位 Key
-                const getCryptoKey = (token) => CryptoJS.SHA256(token).toString();
-                
-                const decryptData = (encryptedBase64, token) => {
-                    try {
-                        const key = CryptoJS.enc.Hex.parse(getCryptoKey(token));
-                        const iv = CryptoJS.enc.Hex.parse('00000000000000000000000000000000'); // 简单 IV，如需更高安全可随机生成存入文件
-                        const decrypted = CryptoJS.AES.decrypt(encryptedBase64, key, {
-                            iv: iv,
-                            mode: CryptoJS.mode.CBC,
-                            padding: CryptoJS.pad.Pkcs7
-                        });
-                        const str = decrypted.toString(CryptoJS.enc.Utf8);
-                        if (!str) throw new Error("解密失败，Key可能错误");
-                        return JSON.parse(str);
-                    } catch (e) {
-                        throw new Error("解密失败: 请检查 Token 是否正确");
-                    }
-                };
+                // --- 核心网络逻辑 ---
 
+                // 解密工具
+                const getCryptoKey = (token) => CryptoJS.SHA256(token).toString();
+                const decryptData = (encryptedBase64, token) => {
+                    const key = CryptoJS.enc.Hex.parse(getCryptoKey(token));
+                    const iv = CryptoJS.enc.Hex.parse('00000000000000000000000000000000');
+                    const decrypted = CryptoJS.AES.decrypt(encryptedBase64, key, { iv: iv, mode: CryptoJS.mode.CBC, padding: CryptoJS.pad.Pkcs7 });
+                    const str = decrypted.toString(CryptoJS.enc.Utf8);
+                    if (!str) throw new Error();
+                    return JSON.parse(str);
+                };
                 const encryptData = (jsonObj, token) => {
                     const key = CryptoJS.enc.Hex.parse(getCryptoKey(token));
                     const iv = CryptoJS.enc.Hex.parse('00000000000000000000000000000000');
-                    const encrypted = CryptoJS.AES.encrypt(JSON.stringify(jsonObj), key, {
-                        iv: iv,
-                        mode: CryptoJS.mode.CBC,
-                        padding: CryptoJS.pad.Pkcs7
-                    });
-                    return encrypted.toString();
+                    return CryptoJS.AES.encrypt(JSON.stringify(jsonObj), key, { iv: iv, mode: CryptoJS.mode.CBC, padding: CryptoJS.pad.Pkcs7 }).toString();
                 };
 
-                // --- API 交互 ---
-                const fetchExchangeRate = async () => {
-                    if (settings.value.lastRateUpdate === todayStr) return; // 今天已更新
-                    try {
-                        const res = await axios.get('https://api.exchangerate-api.com/v4/latest/USD');
-                        if (res.data && res.data.rates && res.data.rates.CNY) {
-                            settings.value.exchangeRate = res.data.rates.CNY;
-                            settings.value.lastRateUpdate = todayStr;
-                            console.log("汇率已更新:", settings.value.exchangeRate);
-                        }
-                    } catch (e) {
-                        console.error("汇率获取失败，使用旧值");
-                    }
-                };
-
-                const handleLogin = async () => {
-                    if (!inputToken.value) return ElMessage.warning("请输入 Token");
+                // 拉取数据核心函数
+                const fetchData = async (isLogin = false) => {
+                    if (!inputToken.value) return;
                     loading.value = true;
-                    
                     try {
-                        const url = `https://api.github.com/repos/${repoOwner.value}/${repoName.value}/contents/${dataPath.value}`;
+                        // 防止缓存，加时间戳
+                        const url = `https://api.github.com/repos/${repoOwner.value}/${repoName.value}/contents/${dataPath.value}?t=${new Date().getTime()}`;
                         const headers = { Authorization: `token ${inputToken.value}`, Accept: 'application/vnd.github.v3+json' };
                         
                         const res = await axios.get(url, { headers });
                         fileSha.value = res.data.sha;
                         
-                        // GitHub 返回的内容通常是 Base64 编码的 (content字段)，但里面存的是我们加密后的 Base64 字符串
-                        // 注意：res.data.content 包含换行符，需要清理
                         const rawContent = res.data.content.replace(/\n/g, '');
-                        // 解码 GitHub 的 Base64 得到 "加密密文"
-                        const encryptedStr = atob(rawContent);
+                        const data = decryptData(atob(rawContent), inputToken.value);
                         
-                        // 解密密文
-                        const data = decryptData(encryptedStr, inputToken.value);
-                        
-                        // 赋值
                         assets.value = data.assets || [];
                         history.value = data.history || [];
                         settings.value = data.settings || settings.value;
 
-                        authorized.value = true;
-                        ElMessage.success("登录成功");
-                        
-                        // 后置处理：汇率 & 快照
-                        await fetchExchangeRate();
-                        recordSnapshot();
-                        
-                        // 初始化图表
-                        nextTick(() => {
-                            initCharts();
-                        });
-
+                        if (isLogin) {
+                            authorized.value = true;
+                            ElMessage.success("登录成功");
+                            checkExchangeRate();
+                        }
                     } catch (e) {
                         console.error(e);
-                        if (e.response && e.response.status === 404) {
-                            ElMessageBox.confirm('未找到数据文件，是否初始化仓库？', '初始化', {
-                                confirmButtonText: '初始化',
-                                cancelButtonText: '取消',
-                                type: 'warning',
-                            }).then(() => {
-                                initRepo();
-                            });
-                        } else {
-                            ElMessage.error(e.message || "登录失败，请检查 Token 或网络");
+                        if (isLogin && e.response && e.response.status === 404) {
+                            ElMessageBox.confirm('仓库为空，是否初始化？', '提示').then(initRepo);
+                        } else if (isLogin) {
+                            ElMessage.error("Token错误或网络异常");
                         }
                     } finally {
                         loading.value = false;
                     }
                 };
 
-                const recordSnapshot = () => {
-                    const last = history.value[history.value.length - 1];
-                    // 如果今天还没有记录，或者需要更新今天的记录
-                    const snapshot = {
-                        date: todayStr,
-                        totalCny: stats.value.totalCny,
-                        totalUsd: stats.value.totalUsd
-                    };
+                // 登录入口
+                const handleLogin = () => fetchData(true);
 
-                    if (!last || last.date !== todayStr) {
-                        history.value.push(snapshot);
-                    } else {
-                        // 更新今天的最新值
-                        history.value[history.value.length - 1] = snapshot;
+                // 汇率检查
+                const checkExchangeRate = async () => {
+                    if (settings.value.lastRateUpdate !== todayStr) {
+                        try {
+                            const res = await axios.get('https://api.exchangerate-api.com/v4/latest/USD');
+                            if (res.data?.rates?.CNY) {
+                                settings.value.exchangeRate = res.data.rates.CNY;
+                                settings.value.lastRateUpdate = todayStr;
+                                // 汇率更新不强制立即保存，等下次操作顺带保存
+                            }
+                        } catch(e) {}
                     }
                 };
 
+                // 自动保存与同步
                 const saveDataToGithub = async () => {
                     saving.value = true;
                     try {
-                        recordSnapshot(); // 保存前更新快照
-                        
-                        const fullData = {
-                            settings: settings.value,
-                            assets: assets.value,
-                            history: history.value
+                        // 1. 更新快照逻辑
+                        const snapshot = {
+                            date: todayStr,
+                            totalCny: stats.value.totalCnyVal,
+                            // 这里我们也可以存一下美元资产以便分析
                         };
+                        
+                        // 检查 history 最后一条
+                        const last = history.value[history.value.length - 1];
+                        if (last && last.date === todayStr) {
+                            history.value[history.value.length - 1] = snapshot; // 覆盖今天
+                        } else {
+                            history.value.push(snapshot); // 新增今天
+                        }
 
+                        // 2. 准备数据
+                        const fullData = { settings: settings.value, assets: assets.value, history: history.value };
                         const encrypted = encryptData(fullData, inputToken.value);
-                        // GitHub API 需要 Base64 编码的内容
-                        const contentBase64 = btoa(encrypted);
-
+                        
                         const url = `https://api.github.com/repos/${repoOwner.value}/${repoName.value}/contents/${dataPath.value}`;
                         const body = {
-                            message: `Update assets: ${todayStr}`,
-                            content: contentBase64,
+                            message: `Auto update: ${todayStr}`,
+                            content: btoa(encrypted),
                             sha: fileSha.value
                         };
                         
-                        const res = await axios.put(url, body, {
-                            headers: { Authorization: `token ${inputToken.value}` }
-                        });
-                        
-                        fileSha.value = res.data.content.sha; // 更新 SHA 以备下次保存
-                        ElMessage.success("同步成功");
+                        const res = await axios.put(url, body, { headers: { Authorization: `token ${inputToken.value}` } });
+                        fileSha.value = res.data.content.sha; // 更新SHA防止冲突
+                        ElMessage.success("已自动加密同步到 GitHub");
                     } catch (e) {
                         ElMessage.error("同步失败: " + e.message);
                     } finally {
@@ -451,7 +491,23 @@
                     }
                 };
 
-                // --- CRUD ---
+                // --- 交互逻辑 ---
+                
+                // 监听视图切换，重新拉取数据或重绘图表
+                watch(currentView, (newView) => {
+                    if (!authorized.value) return;
+                    
+                    if (newView === 'dashboard') {
+                        // 切换回看板：重新拉取最新数据（确保多端一致），然后渲染图表
+                        fetchData().then(() => {
+                            nextTick(initCharts);
+                        });
+                    } else if (newView === 'admin') {
+                        // 切换到管理：拉取最新数据列表
+                        fetchData();
+                    }
+                });
+
                 const openDialog = (type, row = null) => {
                     dialogType.value = type;
                     dialogVisible.value = true;
@@ -459,31 +515,46 @@
                         Object.assign(form, row);
                         currentEditIndex.value = assets.value.indexOf(row);
                     } else {
-                        Object.assign(form, { bank: '', name: '', amount: 0, currency: 'CNY', type: 'current', rate: 0, startDate: todayStr });
+                        // 重置表单，默认选中 fixed
+                        Object.assign(form, { 
+                            bank: '', name: '', amount: 0, currency: 'CNY', 
+                            type: 'fixed', rate: 0, startDate: todayStr 
+                        });
                     }
                 };
 
-                const confirmForm = () => {
+                const confirmForm = async () => {
+                    dialogVisible.value = false;
+                    // 更新本地状态
                     if (dialogType.value === 'add') {
                         assets.value.push({ ...form });
                     } else {
                         assets.value[currentEditIndex.value] = { ...form };
                     }
-                    dialogVisible.value = false;
-                    ElMessage.success("本地数据已更新，请记得同步到 GitHub");
+                    // 自动同步
+                    await saveDataToGithub();
                 };
 
-                const deleteAsset = (index) => {
-                    assets.value.splice(index, 1);
+                const handleDelete = async () => {
+                    ElMessageBox.confirm('确定删除该资产吗？', '警告', { type: 'warning' })
+                        .then(async () => {
+                            dialogVisible.value = false;
+                            assets.value.splice(currentEditIndex.value, 1);
+                            await saveDataToGithub();
+                        }).catch(() => {});
                 };
 
-                // --- Charts ---
+                // --- 图表 ---
                 let historyChartInst = null;
                 let pieChartInst = null;
 
                 const initCharts = () => {
                     const chartDom1 = document.getElementById('historyChart');
                     const chartDom2 = document.getElementById('pieChart');
+                    // 必须先 dispose 避免重复 init 警告或残留
+                    if (historyChartInst) historyChartInst.dispose();
+                    if (pieChartInst) pieChartInst.dispose();
+
                     if (!chartDom1 || !chartDom2) return;
 
                     historyChartInst = echarts.init(chartDom1);
@@ -493,86 +564,67 @@
                 };
 
                 const renderCharts = () => {
-                    if (!historyChartInst || !pieChartInst) return;
+                    if (!historyChartInst || !assets.value.length) return;
 
-                    // 1. History Chart
+                    // 1. 趋势图
                     const dates = history.value.map(h => h.date);
-                    const values = history.value.map(h => h.totalCny.toFixed(0));
+                    const values = history.value.map(h => Math.floor(h.totalCny));
 
                     historyChartInst.setOption({
                         tooltip: { trigger: 'axis' },
-                        grid: { left: '3%', right: '4%', bottom: '3%', containLabel: true },
-                        xAxis: { type: 'category', data: dates },
-                        yAxis: { type: 'value' },
-                        series: [{ data: values, type: 'line', smooth: true, areaStyle: {}, color: '#409EFF' }]
+                        grid: { left: '2%', right: '4%', bottom: '3%', top: '10%', containLabel: true },
+                        xAxis: { type: 'category', data: dates, boundaryGap: false },
+                        yAxis: { type: 'value', splitLine: { lineStyle: { type: 'dashed' } } },
+                        series: [{ 
+                            data: values, type: 'line', smooth: true, 
+                            areaStyle: { opacity: 0.2 }, 
+                            itemStyle: { color: '#409EFF' },
+                            showSymbol: values.length < 10 
+                        }]
                     });
 
-                    // 2. Pie Chart
-                    // 按机构汇总
+                    // 2. 饼图
                     const bankData = {};
                     assets.value.forEach(a => {
                         const val = a.currency === 'USD' ? (a.amount * exchangeRate.value) : a.amount;
-                        bankData[a.bank] = (bankData[a.bank] || 0) + val;
+                        // 如果是理财，显示名字，如果是定期，显示银行
+                        const key = a.type === 'wealth' ? a.name : a.bank;
+                        bankData[key] = (bankData[key] || 0) + val;
                     });
-                    const pieData = Object.keys(bankData).map(k => ({ value: bankData[k].toFixed(0), name: k }));
+                    const pieData = Object.keys(bankData).map(k => ({ value: Math.floor(bankData[k]), name: k }));
 
                     pieChartInst.setOption({
-                        tooltip: { trigger: 'item' },
-                        legend: { bottom: '0%' },
+                        tooltip: { trigger: 'item', formatter: '{b}: {c} ({d}%)' },
                         series: [{
-                            name: '资产分布',
                             type: 'pie',
-                            radius: ['40%', '70%'],
-                            avoidLabelOverlap: false,
-                            itemStyle: { borderRadius: 10, borderColor: '#fff', borderWidth: 2 },
-                            data: pieData
+                            radius: ['40%', '65%'],
+                            itemStyle: { borderRadius: 5, borderColor: '#fff', borderWidth: 2 },
+                            data: pieData,
+                            label: { show: false }, // 手机端隐藏标签，太挤
                         }]
                     });
                 };
 
-                // 监听数据变化重新渲染图表
-                watch(() => assets.value, () => {
-                    if(currentView.value === 'dashboard') {
-                        nextTick(renderCharts);
-                    }
-                }, { deep: true });
-                
-                watch(currentView, (newVal) => {
-                    if (newVal === 'dashboard') {
-                        nextTick(() => {
-                            if (!historyChartInst) initCharts();
-                            else {
-                                historyChartInst.resize();
-                                pieChartInst.resize();
-                                renderCharts();
-                            }
-                        });
-                    }
-                });
-
-                // 窗口大小调整
+                // 窗口大小适配
                 window.addEventListener('resize', () => {
                     historyChartInst && historyChartInst.resize();
                     pieChartInst && pieChartInst.resize();
                 });
 
-                // 初始化仓库（如果404）
-                const initRepo = async () => {
-                    // 创建初始空结构
-                    assets.value = [];
-                    history.value = [];
-                    await saveDataToGithub(); // 创建新文件不需要 SHA
-                    authorized.value = true;
-                    ElMessage.success("仓库初始化成功！");
-                };
-                
                 const logout = () => {
                     authorized.value = false;
                     inputToken.value = '';
                     assets.value = [];
                 };
 
+                const initRepo = async () => {
+                    assets.value = []; history.value = [];
+                    await saveDataToGithub();
+                    authorized.value = true;
+                };
+
                 const formatMoney = (val) => {
+                    if (val === undefined || val === null) return '0.00';
                     return val.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
                 };
 
@@ -581,9 +633,8 @@
                     inputToken, authorized, loading, saving,
                     currentView, stats, exchangeRate, todayStr,
                     assets, form, dialogVisible, dialogType,
-                    handleLogin, saveDataToGithub,
-                    openDialog, confirmForm, deleteAsset,
-                    formatMoney, calculateInterest, logout
+                    handleLogin, openDialog, confirmForm, handleDelete,
+                    formatMoney, calculateDailyReturn, logout
                 };
             }
         };
